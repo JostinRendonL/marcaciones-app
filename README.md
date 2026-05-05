@@ -23,6 +23,7 @@
 | 🔁 **Parseo regex robusto** | Separa horas pegadas, elimina duplicados exactos consecutivos        |
 | 📋 **Asignación dinámica**  | INGRESO / SALIDA / RETORNO / SALIDA FINAL según máximo detectado     |
 | ✏️ **Corrección en línea**  | Edición celda a celda antes de exportar                              |
+| 💰 **Cálculo de Pagos**     | Columna automática PAGAR basada en tarifas (L-V: $3.26, S-D: $6.27)  |
 | 📈 **Dashboard ejecutivo**  | Resumen de personas, fechas y alertas de ambigüedad                  |
 | 🎨 **Formato profesional**  | Encabezados azules, fines de semana grises, celdas como texto        |
 | 🇪🇨 **Locale Ecuador**       | Fechas `DD/MM/YYYY` en todas las salidas                             |
@@ -89,9 +90,9 @@ Tabla con columnas: `DIA | FECHA | HORA DE INGRESO | HORA DE SALIDA`
 | 1           | INGRESO                                                          |
 | 2           | INGRESO · SALIDA FINAL                                           |
 | 3           | INGRESO · SALIDA · SALIDA FINAL                                  |
-| 4           | INGRESO · SALIDA · RETORNO · SALIDA FINAL                        |
-| 5           | INGRESO · SALIDA · RETORNO · SALIDA FINAL + alerta               |
-| 6           | INGRESO · SALIDA · RETORNO · INGRESO 2 · SALIDA 2 · SALIDA FINAL |
+| 4           | INGRESO · SALIDA · INGRESO · SALIDA FINAL                        |
+| 5           | INGRESO · SALIDA · INGRESO · SALIDA FINAL + alerta               |
+| 6           | INGRESO · SALIDA · INGRESO · SALIDA · INGRESO · SALIDA FINAL     |
 
 ---
 
@@ -100,9 +101,10 @@ Tabla con columnas: `DIA | FECHA | HORA DE INGRESO | HORA DE SALIDA`
 - **Una hoja por persona/mes** → nombre: `VICKY Jul25`
 - **Fila 1**: Nombre en rojo/negrita/fusionado
 - **Fila 2**: `Período: 01/07/2025 ~ 31/07/2025`
-- **Fila 4**: Encabezados en azul claro (`D9E1F2`)
+- **Fila 4**: Encabezados en azul claro (`D9E1F2`), y verde oscuro para `PAGAR`
 - **Filas 5+**: Un día por fila, fines de semana en gris (`F2F2F2`)
-- Todas las celdas con `number_format = '@'` (texto puro)
+- **Columna PAGAR**: Calcula exactamente el total a pagar del día mostrando advertencias naranjas (`⚠ Revisar`) si hay marcaciones huérfanas.
+- Todas las celdas con `number_format = '@'` (texto puro) salvo visualizaciones monetarias.
 
 ---
 
@@ -188,8 +190,9 @@ La app está diseñada para **hasta 6 usuarios concurrentes**:
 | Duplicados exactos consecutivos    | Eliminados (ej: `08:00 08:00` → `08:00`)                          |
 | Duplicados distintos `14:20 14:22` | Conservados + alerta visual                                       |
 | Día sin marcaciones                | Celda vacía (no ceros ni guiones)                                 |
+| Marcación de par incompleto        | Columna PAGAR con advertencia `⚠ Revisar`                         |
 | Archivo corrupto                   | Error por persona, no rompe el reporte (genera "Hoja ERROR")      |
-| Bug de descarga Streamlit          | Guardado directo a carpeta Descargas + enlace HTML base64 forzado |
+| Bug de descarga Streamlit          | Enlace HTML base64 forzado para descargas fiables                 |
 | Múltiples períodos en un .xlsx     | Detectados como registros separados                               |
 | Hoja con nombre >31 chars          | Truncada automáticamente                                          |
 

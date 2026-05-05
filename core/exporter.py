@@ -11,7 +11,7 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
-from core.parser import parse_times, get_column_schema, assign_marks_to_columns
+from core.parser import parse_times, get_column_schema, assign_marks_to_columns, get_entry_exit_pairs
 from core.reader import month_short
 
 
@@ -22,9 +22,16 @@ from core.reader import month_short
 _THIN = Side(style="thin")
 _BORDER = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
 
-_GRAY_FILL   = PatternFill("solid", fgColor="F2F2F2")
-_HEADER_FILL = PatternFill("solid", fgColor="D9E1F2")  # Azul claro
-_NAME_FILL   = PatternFill("solid", fgColor="FF0000")  # Rojo para nombre
+_GRAY_FILL    = PatternFill("solid", fgColor="F2F2F2")   # weekend rows
+_HEADER_FILL  = PatternFill("solid", fgColor="D9E1F2")   # blue-ish header
+_NAME_FILL    = PatternFill("solid", fgColor="C00000")   # red name banner
+_PAGAR_FILL   = PatternFill("solid", fgColor="E2EFDA")   # light green pay header
+_WARN_FILL    = PatternFill("solid", fgColor="FF6600")   # orange warning cell
+_PAGAR_H_FILL = PatternFill("solid", fgColor="70AD47")   # dark-green pay header
+
+# Pay rates (USD / hour)
+_RATE_WEEKDAY = 3.26
+_RATE_WEEKEND = 6.27
 
 _DAYS_ES = {
     0: "Lunes", 1: "Martes", 2: "Miércoles", 3: "Jueves",
@@ -136,9 +143,19 @@ def _write_person_sheet(wb, record: dict, edited_days: Optional[dict] = None):
     ws.row_dimensions[3].height = 6
 
     # ── Row 4: Headers ───────────────────────────────────────────────────
-    headers = ["FECHA", "DIA"] + schema
+    headers = ["FECHA", "DIA"] + schema + ["PAGAR"]
     for ci, h in enumerate(headers, start=1):
-        _write(ws, 4, ci, h, bold=True, fill=_HEADER_FILL, size=10)
+        if h == "PAGAR":
+            _write(ws, 4, ci, h, bold=True, fill=_PAGAR_H_FILL,
+                   color="FFFFFF", size=10)
+        else:
+            _write(ws, 4, ci, h, bold=True, fill=_HEADER_FILL, size=10)
+
+    # Pre-compute (entry_col, exit_col) pairs (0-based within schema)
+    pairs = get_entry_exit_pairs(schema)
+    # Column numbers in the sheet (1-based): FECHA=1, DIA=2, schema starts at 3
+    schema_offset = 3  # first schema column
+    pagar_col = schema_offset + len(schema)  # last column
 
     # ── Row 5+: Data rows ─────────────────────────────────────────────────
     for day_num in range(1, days_in_month + 1):
@@ -155,6 +172,7 @@ def _write_person_sheet(wb, record: dict, edited_days: Optional[dict] = None):
 
         is_weekend = weekday >= 5
         row_fill = _GRAY_FILL if is_weekend else None
+        rate     = _RATE_WEEKEND if is_weekend else _RATE_WEEKDAY
 
         # Write FECHA and DIA
         _write(ws, data_row, 1, fecha_str, fill=row_fill)
@@ -164,21 +182,74 @@ def _write_person_sheet(wb, record: dict, edited_days: Optional[dict] = None):
         raw    = days.get(day_num, "")
         parsed = parse_times(raw, name, str(day_num))
         mapped = assign_marks_to_columns(parsed, schema)
+        pos    = mapped.get("_pos", {})
 
-        for ci, col_name in enumerate(schema, start=3):
-            _write(ws, data_row, ci, mapped.get(col_name, ""), fill=row_fill)
+        # Write time cells using positional values (handles duplicate col names)
+        for ci, col_name in enumerate(schema, start=schema_offset):
+            pos_idx = ci - schema_offset  # 0-based
+            val = pos.get(pos_idx, mapped.get(col_name, "")) if pos else mapped.get(col_name, "")
+            _write(ws, data_row, ci, val, fill=row_fill)
+
+        # ── PAGAR calculation ─────────────────────────────────────────────
+        if not pairs or not parsed:
+            # No time at all → leave blank
+            _write(ws, data_row, pagar_col, "", fill=row_fill)
+        else:
+            total_hours = 0.0
+            has_warning = False
+            for (entry_idx, exit_idx) in pairs:
+                entry_val = pos.get(entry_idx, "") if pos else ""
+                exit_val  = pos.get(exit_idx,  "") if pos else ""
+
+                # If exactly one of the two is missing → mark as warning
+                if bool(entry_val) != bool(exit_val):
+                    has_warning = True
+                    break
+
+                # Both present → accumulate hours
+                if entry_val and exit_val:
+                    try:
+                        eh, em = map(int, entry_val.split(":"))
+                        xh, xm = map(int, exit_val.split(":"))
+                        delta_h = (xh * 60 + xm - eh * 60 - em) / 60.0
+                        if delta_h < 0:
+                            delta_h += 24  # past midnight
+                        total_hours += delta_h
+                    except (ValueError, TypeError):
+                        has_warning = True
+                        break
+
+            if has_warning:
+                c = ws.cell(row=data_row, column=pagar_col)
+                c.value = "⚠ Revisar"
+                c.font  = Font(bold=True, size=10, color="FFFFFF")
+                c.fill  = _WARN_FILL
+                c.alignment = Alignment(horizontal="center", vertical="center")
+                c.border = _BORDER
+                c.number_format = "@"
+            else:
+                pay = round(total_hours * rate, 2)
+                _write(ws, data_row, pagar_col,
+                       f"${pay:.2f}" if pay else "",
+                       fill=row_fill)
 
     # ── Column widths ─────────────────────────────────────────────────────
     col_widths = {"FECHA": 13, "DIA": 11}
     for col_name in schema:
         col_widths[col_name] = 13
 
-    all_headers = ["FECHA", "DIA"] + schema
-    for ci, h in enumerate(all_headers, start=1):
-        ws.column_dimensions[get_column_letter(ci)].width = col_widths.get(h, 13)
+    all_headers = ["FECHA", "DIA"] + schema + ["PAGAR"]
+    widths_list = [col_widths.get(h, 13) for h in all_headers]
+    widths_list[-1] = 13  # PAGAR column
+
+    for ci, w in enumerate(widths_list, start=1):
+        ws.column_dimensions[get_column_letter(ci)].width = w
 
     ws.row_dimensions[1].height = 20
     ws.row_dimensions[4].height = 18
+
+    # ── Freeze panes so header stays visible ──────────────────────────────
+    ws.freeze_panes = "C5"  # freeze FECHA + DIA columns and first 4 rows
 
 
 # ─────────────────────────────────────────────────────────────────────────────

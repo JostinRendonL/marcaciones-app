@@ -16,7 +16,7 @@ from core.ocr      import (
     OCR_AVAILABLE, extract_text_from_image,
     parse_ocr_text_to_df, ocr_df_to_records,
 )
-from core.parser   import parse_times, get_column_schema
+from core.parser   import parse_times, get_column_schema, assign_marks_to_columns, get_entry_exit_pairs
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -531,6 +531,7 @@ with tab_export:
             st.markdown("- ✅ Fines de semana gris (#F2F2F2)")
             st.markdown("- ✅ Celdas formato texto")
             st.markdown("- ✅ Fechas DD/MM/YYYY (Ecuador)")
+            st.markdown("- ✅ Columna **PAGAR** automatizada")
 
         st.markdown("---")
 
@@ -567,21 +568,11 @@ with tab_export:
                     st.session_state["xlsx_bytes"] = None
 
         if st.session_state.get("xlsx_bytes"):
-            import base64, os
+            import base64
             xlsx_data = st.session_state["xlsx_bytes"]
             fname = st.session_state.get("xlsx_filename", "Asistencia.xlsx")
 
-            # ── Save directly to user's Downloads folder ──────────────────
-            downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads")
-            local_path = os.path.join(downloads_dir, fname)
-            try:
-                with open(local_path, "wb") as f:
-                    f.write(xlsx_data)
-                st.success(f"✅ Archivo guardado en: **{local_path}**")
-            except Exception as exc:
-                st.warning(f"No se pudo guardar automáticamente: {exc}")
-
-            # ── Also provide a clickable HTML download link ───────────────
+            # ── Provide a clickable HTML download link ───────────────
             b64 = base64.b64encode(xlsx_data).decode()
             href = (
                 f'<a href="data:application/vnd.openxmlformats-officedocument'
@@ -604,7 +595,6 @@ with tab_export:
                 month = rec["month"] or 1
                 year  = rec["year"] or 2025
 
-                from core.parser import parse_times, get_column_schema, assign_marks_to_columns
 
                 days = dict(rec["days"])
                 # Apply edits
@@ -623,25 +613,99 @@ with tab_export:
                     0: "Lunes", 1: "Martes", 2: "Miércoles", 3: "Jueves",
                     4: "Viernes", 5: "Sábado", 6: "Domingo",
                 }
+
+                # Build unique column display headers for repeated names
+                # e.g. [INGRESO, SALIDA, INGRESO, SALIDA, INGRESO, SALIDA FINAL]
+                # → [INGRESO, SALIDA, INGRESO_2, SALIDA_2, INGRESO_3, SALIDA FINAL]
+                def _unique_headers(s):
+                    seen = {}
+                    result = []
+                    for col in s:
+                        if col not in seen:
+                            seen[col] = 1
+                            result.append(col)
+                        else:
+                            seen[col] += 1
+                            result.append(f"{col}_{seen[col]}")
+                    return result
+
+                uniq_schema = _unique_headers(schema)
+
                 for day_num in range(1, min(days_in_month + 1, 8)):
                     try:
                         d_obj   = date(year, month, day_num)
                         raw_t   = days.get(day_num, "")
                         parsed  = parse_times(raw_t)
                         mapped  = assign_marks_to_columns(parsed, schema)
+                        pos     = mapped.get("_pos", {})
                         row_data = {
                             "FECHA": d_obj.strftime("%d/%m/%Y"),
                             "DIA":   _DAYS_ES_PREV[d_obj.weekday()],
                         }
-                        row_data.update(mapped)
+                        for pos_i, uniq_col in enumerate(uniq_schema):
+                            row_data[uniq_col] = pos.get(pos_i, "") if pos else mapped.get(schema[pos_i], "")
                         preview_rows.append(row_data)
                     except ValueError:
                         pass
 
                 with st.expander(f"👤 {build_sheet_name(name, month, year)}", expanded=False):
                     if preview_rows:
+                        preview_df = pd.DataFrame(preview_rows)
+
+                        # ── Add PAGAR column to preview ───────────────────
+                        _RATE_WD = 3.26
+                        _RATE_WE = 6.27
+                        pairs_schema = get_entry_exit_pairs(schema)
+
+                        def _compute_pagar(row):
+                            """Return pay string or warning for one preview row."""
+                            if not pairs_schema:
+                                return ""
+                            # Detect weekend from DIA column
+                            is_we = row.get("DIA", "") in ("Sábado", "Domingo")
+                            rate = _RATE_WE if is_we else _RATE_WD
+
+                            total_h = 0.0
+                            warn = False
+                            for (ei, xi) in pairs_schema:
+                                # Use unique column names to look up correct slot
+                                entry_col = uniq_schema[ei] if ei < len(uniq_schema) else ""
+                                exit_col  = uniq_schema[xi] if xi < len(uniq_schema) else ""
+                                entry_v = str(row.get(entry_col, "") or "").strip()
+                                exit_v  = str(row.get(exit_col,  "") or "").strip()
+                                if bool(entry_v) != bool(exit_v):
+                                    warn = True
+                                    break
+                                if entry_v and exit_v:
+                                    try:
+                                        eh, em = map(int, entry_v.split(":"))
+                                        xh, xm = map(int, exit_v.split(":"))
+                                        dh = (xh * 60 + xm - eh * 60 - em) / 60.0
+                                        if dh < 0:
+                                            dh += 24
+                                        total_h += dh
+                                    except (ValueError, TypeError):
+                                        warn = True
+                                        break
+                            if warn:
+                                return "⚠️ Revisar"
+                            if total_h == 0:
+                                return ""
+                            
+                            return f"${total_h * rate:.2f}"
+
+                        preview_df["PAGAR"] = preview_df.apply(_compute_pagar, axis=1)
+
+                        # Color-code PAGAR column
+                        def _style_pagar(val):
+                            if str(val).startswith("⚠️"):
+                                return "background-color:#FF6600;color:white;font-weight:bold"
+                            if str(val).startswith("$"):
+                                return "background-color:#E2EFDA;color:#375623;font-weight:600"
+                            return ""
+
                         st.dataframe(
-                            pd.DataFrame(preview_rows),
+                            preview_df.style.applymap(_style_pagar, subset=["PAGAR"]),
                             use_container_width=True,
                             hide_index=True,
                         )
