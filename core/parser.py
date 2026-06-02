@@ -103,15 +103,17 @@ def assign_marks_to_columns(times: List[str], schema: List[str]) -> dict:
     n = len(slots)
 
     if n == 1:
-        if times:
-            result["INGRESO"] = times[0]
+        val = times[0] if times else ""
+        result["INGRESO"] = val
+        result["_pos"] = {0: val}
         return result
 
     if n == 2:
-        if len(times) >= 1:
-            result["INGRESO"] = times[0]
-        if len(times) >= 2:
-            result["SALIDA FINAL"] = times[-1]
+        v0 = times[0] if len(times) >= 1 else ""
+        v1 = times[-1] if len(times) >= 2 else ""
+        result["INGRESO"] = v0
+        result["SALIDA FINAL"] = v1
+        result["_pos"] = {0: v0, 1: v1}
         return result
 
     # For schemas with repeated names we need per-position storage.
