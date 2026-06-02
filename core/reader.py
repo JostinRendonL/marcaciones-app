@@ -121,37 +121,49 @@ def _parse_date_cell(val) -> Optional[date]:
     return None
 
 
+def _is_name_text(s: str) -> bool:
+    """Return True if the string looks like a person name (no colons, not purely numeric)."""
+    s = s.strip()
+    return bool(s) and ":" not in s and not s.replace(" ", "").replace("_", "").replace("-", "").isdigit()
+
+
 def _extract_person_name(row) -> Optional[str]:
     """
     Extract person name from an ID row.
-    Format: C0='ID:' C2=cédula C8='Nombre:' C10=name C18='Departamento:' C20=dept
 
-    The actual name may be in C10, or in C2 (if C10 is empty and C2 is text).
+    Handles two formats:
+      Standard:  C0='ID:' C2=cédula/name C10=name
+      Alternate: C0=empty, C2=name (no 'ID:' prefix — some biometric exports)
     """
     cells = list(row)
     first = str(cells[0] or "").strip().upper() if cells else ""
 
-    if first != "ID:":
-        return None
+    # ── Standard format: starts with "ID:" ────────────────────────────────
+    if first == "ID:":
+        name = ""
+        # Try C10 first (Nombre: field)
+        if len(cells) > 10 and cells[10] is not None:
+            name = str(cells[10]).strip()
 
-    # Try C10 first (Nombre: field)
-    name = ""
-    if len(cells) > 10 and cells[10] is not None:
-        name = str(cells[10]).strip()
+        # Fall back to C2 if C10 is empty (name may be in the cédula column)
+        if (not name or len(name) <= 1) and len(cells) > 2 and cells[2] is not None:
+            candidate = str(cells[2]).strip()
+            if not candidate.replace(" ", "").isdigit():
+                name = candidate
 
-    # If C10 is empty or too short, try C2 (sometimes the full name is in the cedula column)
-    if (not name or len(name) <= 1) and len(cells) > 2 and cells[2] is not None:
-        candidate = str(cells[2]).strip()
-        # Only use C2 if it's text (not a pure number / cedula)
-        if not candidate.replace(" ", "").isdigit():
-            name = candidate
+        # Last resort: C20 (Departamento value sometimes holds first name)
+        if not name and len(cells) > 20 and cells[20] is not None:
+            name = str(cells[20]).strip()
 
-    # Clean up: also grab dept name if it enriches (e.g., C20 has part of name)
-    # In some files, first-name is at C20 (Departamento value) — skip unless C10 is empty
-    if not name and len(cells) > 20 and cells[20] is not None:
-        name = str(cells[20]).strip()
+        return name.strip() if name else None
 
-    return name.strip() if name else None
+    # ── Alternate format: name directly in C2, C0 empty ───────────────────
+    if first == "" and len(cells) > 2:
+        candidate = str(cells[2] or "").strip()
+        if _is_name_text(candidate):
+            return candidate
+
+    return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -191,9 +203,18 @@ def _is_period_row(row) -> bool:
 
 
 def _is_id_row(row) -> bool:
-    """Check if row starts with 'ID:'."""
-    first = str(row[0] or "").strip().upper() if row else ""
-    return first == "ID:"
+    """Check if row starts with 'ID:' or has a name in col[2] with col[0] empty."""
+    if not row:
+        return False
+    first = str(row[0] or "").strip().upper()
+    if first == "ID:":
+        return True
+    # Alternate format: name in col[2], col[0] empty (some biometric exports omit 'ID:')
+    if first == "" and len(row) > 2:
+        candidate = str(row[2] or "").strip()
+        if _is_name_text(candidate):
+            return True
+    return False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
