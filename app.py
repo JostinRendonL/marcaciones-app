@@ -654,7 +654,7 @@ with tab_export:
 
                         # ── Add PAGAR column to preview ───────────────────
                         _RATE_WD = 3.26
-                        _RATE_WE = 6.27
+                        _RATE_WE = 6.37
                         pairs_schema = get_entry_exit_pairs(schema)
 
                         def _compute_pagar(row):

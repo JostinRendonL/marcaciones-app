@@ -31,7 +31,7 @@ _PAGAR_H_FILL = PatternFill("solid", fgColor="70AD47")   # dark-green pay header
 
 # Pay rates (USD / hour)
 _RATE_WEEKDAY = 3.26
-_RATE_WEEKEND = 6.27
+_RATE_WEEKEND = 6.37
 
 _DAYS_ES = {
     0: "Lunes", 1: "Martes", 2: "Miércoles", 3: "Jueves",
