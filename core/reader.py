@@ -145,7 +145,15 @@ def _extract_person_name(row) -> Optional[str]:
         if len(cells) > 10 and cells[10] is not None:
             name = str(cells[10]).strip()
 
-        # Fall back to C2 if C10 is empty (name may be in the cédula column)
+        # Try C8 — some exports store "Nombre: [name]" or "Nombre:\n[name]" there
+        if (not name or len(name) <= 1) and len(cells) > 8 and cells[8] is not None:
+            col8 = str(cells[8]).strip()
+            if re.search(r'(?i)nombre\s*:', col8):
+                extracted = re.sub(r'(?i)^.*nombre\s*:\s*\n?\s*', '', col8).strip()
+                if extracted and len(extracted) > 1 and not extracted.replace(" ", "").isdigit():
+                    name = extracted
+
+        # Fall back to C2 if still empty (name may be in the cédula column)
         if (not name or len(name) <= 1) and len(cells) > 2 and cells[2] is not None:
             candidate = str(cells[2]).strip()
             if not candidate.replace(" ", "").isdigit():
@@ -339,6 +347,19 @@ def _read_raw_biometric_sheet(ws) -> List[dict]:
                     m, y = parse_period_from_text(s)
                     if m and y:
                         current_month, current_year = m, y
+                        break
+            # Some exports have the correct end-date in a later column (e.g. col[11])
+            # while col[2] still shows the previous month — use the later date if newer.
+            for ci in range(len(row)):
+                val = row[ci]
+                if val is None:
+                    continue
+                s = str(val).strip()
+                if re.search(r"\d{4}-\d{2}-\d{2}", s) and "~" not in s:
+                    m2, y2 = parse_period_from_text(s)
+                    if m2 and y2:
+                        if current_year is None or y2 > current_year or (y2 == current_year and m2 > current_month):
+                            current_month, current_year = m2, y2
                         break
             i += 1
             continue
