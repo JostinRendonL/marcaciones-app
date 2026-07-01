@@ -28,6 +28,8 @@ _NAME_FILL    = PatternFill("solid", fgColor="C00000")   # red name banner
 _PAGAR_FILL   = PatternFill("solid", fgColor="E2EFDA")   # light green pay header
 _WARN_FILL    = PatternFill("solid", fgColor="FF6600")   # orange warning cell
 _PAGAR_H_FILL = PatternFill("solid", fgColor="70AD47")   # dark-green pay header
+_HORAS_H_FILL = PatternFill("solid", fgColor="4472C4")   # blue hours header
+_TOTAL_FILL   = PatternFill("solid", fgColor="FFF2CC")   # yellow total row
 
 # Pay rates (USD / hour)
 _RATE_WEEKDAY = 3.26
@@ -143,19 +145,23 @@ def _write_person_sheet(wb, record: dict, edited_days: Optional[dict] = None):
     ws.row_dimensions[3].height = 6
 
     # ── Row 4: Headers ───────────────────────────────────────────────────
-    headers = ["FECHA", "DIA"] + schema + ["PAGAR"]
+    headers = ["FECHA", "DIA"] + schema + ["HORAS", "PAGAR"]
     for ci, h in enumerate(headers, start=1):
         if h == "PAGAR":
-            _write(ws, 4, ci, h, bold=True, fill=_PAGAR_H_FILL,
-                   color="FFFFFF", size=10)
+            _write(ws, 4, ci, h, bold=True, fill=_PAGAR_H_FILL, color="FFFFFF", size=10)
+        elif h == "HORAS":
+            _write(ws, 4, ci, h, bold=True, fill=_HORAS_H_FILL, color="FFFFFF", size=10)
         else:
             _write(ws, 4, ci, h, bold=True, fill=_HEADER_FILL, size=10)
 
     # Pre-compute (entry_col, exit_col) pairs (0-based within schema)
     pairs = get_entry_exit_pairs(schema)
-    # Column numbers in the sheet (1-based): FECHA=1, DIA=2, schema starts at 3
-    schema_offset = 3  # first schema column
-    pagar_col = schema_offset + len(schema)  # last column
+    schema_offset = 3  # first schema column (FECHA=1, DIA=2)
+    horas_col = schema_offset + len(schema)       # HORAS column
+    pagar_col = schema_offset + len(schema) + 1   # PAGAR column
+
+    grand_total_hours = 0.0
+    grand_total_pay   = 0.0
 
     # ── Row 5+: Data rows ─────────────────────────────────────────────────
     for day_num in range(1, days_in_month + 1):
@@ -184,15 +190,15 @@ def _write_person_sheet(wb, record: dict, edited_days: Optional[dict] = None):
         mapped = assign_marks_to_columns(parsed, schema)
         pos    = mapped.get("_pos", {})
 
-        # Write time cells using positional values (handles duplicate col names)
+        # Write time cells
         for ci, col_name in enumerate(schema, start=schema_offset):
-            pos_idx = ci - schema_offset  # 0-based
+            pos_idx = ci - schema_offset
             val = pos.get(pos_idx, mapped.get(col_name, "")) if pos else mapped.get(col_name, "")
             _write(ws, data_row, ci, val, fill=row_fill)
 
-        # ── PAGAR calculation ─────────────────────────────────────────────
+        # ── HORAS + PAGAR calculation ──────────────────────────────────────
         if not pairs or not parsed:
-            # No time at all → leave blank
+            _write(ws, data_row, horas_col, "", fill=row_fill)
             _write(ws, data_row, pagar_col, "", fill=row_fill)
         else:
             total_hours = 0.0
@@ -201,25 +207,24 @@ def _write_person_sheet(wb, record: dict, edited_days: Optional[dict] = None):
                 entry_val = pos.get(entry_idx, "") if pos else ""
                 exit_val  = pos.get(exit_idx,  "") if pos else ""
 
-                # If exactly one of the two is missing → mark as warning
                 if bool(entry_val) != bool(exit_val):
                     has_warning = True
                     break
 
-                # Both present → accumulate hours
                 if entry_val and exit_val:
                     try:
                         eh, em = map(int, entry_val.split(":"))
                         xh, xm = map(int, exit_val.split(":"))
                         delta_h = (xh * 60 + xm - eh * 60 - em) / 60.0
                         if delta_h < 0:
-                            delta_h += 24  # past midnight
+                            delta_h += 24
                         total_hours += delta_h
                     except (ValueError, TypeError):
                         has_warning = True
                         break
 
             if has_warning:
+                _write(ws, data_row, horas_col, "⚠", fill=row_fill)
                 c = ws.cell(row=data_row, column=pagar_col)
                 c.value = "⚠ Revisar"
                 c.font  = Font(bold=True, size=10, color="FFFFFF")
@@ -229,17 +234,43 @@ def _write_person_sheet(wb, record: dict, edited_days: Optional[dict] = None):
                 c.number_format = "@"
             else:
                 pay = round(total_hours * rate, 2)
+                # HORAS: format as H:MM
+                h_int = int(total_hours)
+                m_int = round((total_hours - h_int) * 60)
+                horas_str = f"{h_int}:{m_int:02d}" if total_hours else ""
+                _write(ws, data_row, horas_col, horas_str, fill=row_fill)
                 _write(ws, data_row, pagar_col,
-                       f"${pay:.2f}" if pay else "",
-                       fill=row_fill)
+                       f"${pay:.2f}" if pay else "", fill=row_fill)
+                grand_total_hours += total_hours
+                grand_total_pay   += pay
+
+    # ── Total row ─────────────────────────────────────────────────────────
+    total_row = 4 + days_in_month + 1
+    ws.merge_cells(start_row=total_row, start_column=1,
+                   end_row=total_row, end_column=horas_col - 1)
+    lbl = ws.cell(row=total_row, column=1)
+    lbl.value = "TOTAL"
+    lbl.font  = Font(bold=True, size=10, color="000000")
+    lbl.fill  = _TOTAL_FILL
+    lbl.alignment = Alignment(horizontal="center", vertical="center")
+    lbl.border = _BORDER
+
+    gh_int = int(grand_total_hours)
+    gm_int = round((grand_total_hours - gh_int) * 60)
+    _write(ws, total_row, horas_col,
+           f"{gh_int}:{gm_int:02d}", bold=True, fill=_TOTAL_FILL)
+    _write(ws, total_row, pagar_col,
+           f"${grand_total_pay:.2f}", bold=True, fill=_TOTAL_FILL)
+    ws.row_dimensions[total_row].height = 16
 
     # ── Column widths ─────────────────────────────────────────────────────
     col_widths = {"FECHA": 13, "DIA": 11}
     for col_name in schema:
         col_widths[col_name] = 13
 
-    all_headers = ["FECHA", "DIA"] + schema + ["PAGAR"]
+    all_headers = ["FECHA", "DIA"] + schema + ["HORAS", "PAGAR"]
     widths_list = [col_widths.get(h, 13) for h in all_headers]
+    widths_list[-2] = 9   # HORAS column
     widths_list[-1] = 13  # PAGAR column
 
     for ci, w in enumerate(widths_list, start=1):
