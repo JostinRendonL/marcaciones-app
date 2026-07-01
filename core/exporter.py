@@ -224,9 +224,9 @@ def _write_person_sheet(wb, record: dict, edited_days: Optional[dict] = None):
                         break
 
             if has_warning:
-                _write(ws, data_row, horas_col, "⚠", fill=row_fill)
+                _write(ws, data_row, horas_col, "!", fill=row_fill)
                 c = ws.cell(row=data_row, column=pagar_col)
-                c.value = "⚠ Revisar"
+                c.value = "REVISAR"
                 c.font  = Font(bold=True, size=10, color="FFFFFF")
                 c.fill  = _WARN_FILL
                 c.alignment = Alignment(horizontal="center", vertical="center")
