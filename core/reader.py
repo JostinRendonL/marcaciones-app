@@ -348,19 +348,24 @@ def _read_raw_biometric_sheet(ws) -> List[dict]:
                     if m and y:
                         current_month, current_year = m, y
                         break
-            # Some exports have the correct end-date in a later column (e.g. col[11])
-            # while col[2] still shows the previous month — use the later date if newer.
-            for ci in range(len(row)):
-                val = row[ci]
-                if val is None:
-                    continue
-                s = str(val).strip()
-                if re.search(r"\d{4}-\d{2}-\d{2}", s) and "~" not in s:
-                    m2, y2 = parse_period_from_text(s)
-                    if m2 and y2:
-                        if current_year is None or y2 > current_year or (y2 == current_year and m2 > current_month):
-                            current_month, current_year = m2, y2
-                        break
+            # Fallback: if col[2] had no "~" range (wrong period label), look for
+            # a standalone end-date in other columns (e.g. col[11] = period end).
+            # Only apply when the period from col[2] had NO "~" separator.
+            period_had_range = any(
+                "~" in str(row[ci] or "") for ci in range(len(row))
+            )
+            if not period_had_range:
+                for ci in range(len(row)):
+                    val = row[ci]
+                    if val is None:
+                        continue
+                    s = str(val).strip()
+                    if re.search(r"\d{4}-\d{2}-\d{2}", s) and "~" not in s:
+                        m2, y2 = parse_period_from_text(s)
+                        if m2 and y2:
+                            if current_year is None or y2 > current_year or (y2 == current_year and m2 > current_month):
+                                current_month, current_year = m2, y2
+                            break
             i += 1
             continue
 
